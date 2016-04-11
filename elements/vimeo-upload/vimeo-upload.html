@@ -1,0 +1,450 @@
+<!--
+@license
+Copyright (c) 2015 The Polymer Project Authors. All rights reserved.
+This code may only be used under the BSD style license found at http://polymer.github.io/LICENSE.txt
+The complete set of authors may be found at http://polymer.github.io/AUTHORS.txt
+The complete set of contributors may be found at http://polymer.github.io/CONTRIBUTORS.txt
+Code distributed by Google as part of the polymer project is also
+subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
+-->
+
+<link rel="import" href="../../bower_components/polymer/polymer.html">
+<link rel="import" href="../../bower_components/paper-styles/typography.html">
+<link rel="import" href="../../bower_components/google-signin/google-signin.html">
+<link rel="import" href="../../bower_components/google-apis/google-client-loader.html">
+<link rel="import" href="../../bower_components/google-youtube-upload/google-youtube-upload.html">
+<link rel="import" href="../../bower_components/iron-input/iron-input.html">
+
+<link rel="import" href="../../bower_components/core-input/core-input.html">
+<link rel="import" href="../../bower_components/paper-button/paper-button.html">
+
+
+<dom-module id="vimeo-upload" attributes="auto selectedFile isCordovaApp accessToken videoTitle description privacyStatus videoId url">
+  <!--
+  <template>
+
+    <div style="display: {{ authenticated ? 'block' : 'none' }}">
+
+      <template if="{{!isCordovaApp}}">
+        <input type="file" id="file" class="button" accept="video/*" on-change="{{handleFileChanged}}">
+      </template>
+      <template if="{{isCordovaApp}}">
+        <paper-button raised on-click="{{chooseFile}}">Choose File</paper-button>
+      </template>
+
+      <div style="width:140px;padding-top:10px">
+        <paper-button raised on-click="{{handleUploadClicked}}" class="upload" style="display: {{ auto ? 'none' : 'block' }}" disabled?="{{ !selectedFile }}">Upload</paper-button>
+      </div>
+    </div>
+
+  </template>
+  -->
+  <div style="display: {{ authenticated ? 'block' : 'none' }}">
+  <template>
+    <style>
+      :host {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        box-sizing: border-box;
+      }
+      #core_card {
+        position: absolute;
+        width: 300px;
+        height: auto;
+        border-radius: 2px;
+        box-shadow: rgba(0, 0, 0, 0.0980392) 0px 2px 4px, rgba(0, 0, 0, 0.0980392) 0px 0px 3px;
+        left: 20px;
+        top: 20px;
+        background-color: rgb(255, 255, 255);
+      }
+      #input {
+        padding: 15px;
+      }
+      .mybuttons {
+        background-color: #7baaf7;
+      }
+    </style>
+    <core-card id="core_card" layout vertical>
+
+      <input type="file" id="file" class="button" accept="video/*" on-change="{{handleFileChanged}}">
+      <hr>
+      <!--
+      <paper-button raised id="paper_button" class="mybuttons" on-click="{{chooseFile}}">Choose Video</paper-button>
+      <hr>
+      -->
+      <paper-button raised id="paper_button1" on-click="{{handleUploadClicked}}" class="mybuttons" style="display: {{ auto ? 'none' : 'block' }}" disabled?="{{ !selectedFile }}">Upload</paper-button>
+
+    </core-card>
+  </template>
+
+  </div>
+
+  <script>
+    (function(){
+      // One minute.
+      var STATUS_POLLING_ITERVAL_MILLIS = 60 * 1000;
+
+      Polymer({
+        is: 'vimeo-upload',
+
+        /**
+         * Fired when the upload begins.
+         *
+         * `e.detail` is set to the
+         * [file](https://developer.mozilla.org/en-US/docs/Web/API/File)
+         * being uploaded.
+         *
+         * @event vimeo-upload-start
+         * @param {Object} e Event parameters.
+         */
+
+        /**
+         * Fired while the upload is in progress.
+         *
+         * `e.detail.progressEvent` is set to the corresponding
+         * [XMLHttpRequestProgressEvent](http://www.w3.org/TR/progress-events/).
+         *
+         * `e.detail.estimatedSecondsRemaining` is set to an estimate of the time remaining
+         * in the upload, based on the average upload speed so far.
+         *
+         * `e.detail.bytesPerSecond` is set to the average number of bytes sent per second
+         * sent so far.
+         *
+         * `e.fractionComplete` is set to the fraction of the upload that's complete, in the range [0, 1].
+         *
+         * @event vimeo-upload-progress
+         * @param {Object} e Event parameters.
+         */
+
+        /**
+         * Fired when Vimeo upload has failed.
+         *
+         * Since the actual upload failed, it's not possible for the Vimeo server to
+         * attempt to process the video, and no `vimeo-processing-poll`
+         * events will be fired.
+         *
+         * `e.detail` is set to a string explaining what went wrong.
+         *
+         * @event vimeo-upload-fail
+         * @param {Object} e Event parameters
+         */
+
+        /**
+         * Fired when video upload has completed, and Vimeo has begun processing the video.
+         *
+         * At this point, the video is not yet playable, and there is no guarantee that
+         * the server-side Vimeo processing will succeed.
+         *
+         * One or more `vimeo-processing-poll` events will then be fired after this event,
+         * followed by either a `vimeo-processing-complete` or `vimeo-processing-fail`.
+         *
+         * `e.detail` is set to the Vimeo video id of the video.
+         *
+         * @event vimeo-upload-complete
+         * @param {Object} e Event parameters.
+         */
+
+        /**
+         * Fired while server-side processing is in progress.
+         *
+         * Server-side processing can take an
+         * [unpredictable amount of time](https://support.google.com/youtube/answer/71674?hl=en&ref_topic=2888603),
+         * and these events will be periodically fired each time the processing status is polled.
+         *
+         * `e.detail` is set to a
+         * [status](https://developers.google.com/youtube/v3/docs/videos#status)
+         * object.
+         *
+         * @event vimeo-processing-poll
+         * @param {Object} e Event parameters
+         */
+
+        /**
+         * Fired when server-side processing is successful and the video is
+         * available for playback on Vimeo.
+         *
+         * The video can be played at `http://youtu.be/VIDEO_ID` and can be
+         * embedded using the
+         * [`google-youtube`](https://github.com/GoogleWebComponents/google-youtube) element.
+         *
+         * `e.detail` is set to the Vimeo video id of the video.
+         *
+         * @event vimeo-processing-complete
+         * @param {Object} e Event parameters
+         */
+
+        /**
+         * Fired when the video
+         * [failed transcoding](https://support.google.com/youtube/topic/2888603?hl=en&ref_topic=16547)
+         * and can't be played on Vimeo.
+         *
+         * `e.detail` is set to a
+         * [status](https://developers.google.com/youtube/v3/docs/videos#status)
+         * object which has more details about the failure.
+         *
+         * @event vimeo-processing-fail
+         * @param {Object} e Event parameters
+         */
+
+        /**
+         * Whether files should be automatically uploaded.
+         *
+         * @attribute auto
+         * @type boolean
+         * @default false
+         */
+        auto: false,
+
+        /**
+         * Whether the user has authenticated or not (Yes always)
+         *
+         * @attribute authenticated
+         * @type boolean
+         */
+        authenticated: true,
+
+        /**
+         * The title for the new Vimeo video.
+         *
+         * @attribute title
+         * @type string
+         * @default 'Untitled Video'
+         */
+        videoTitle: 'Untitled Video',
+
+        /**
+         * The description for the new Vimeo video.
+         *
+         * @attribute description
+         * @type string
+         * @default 'Uploaded via a web component! Check out https://github.com/GoogleWebComponents/vimeo-upload'
+         */
+        description: 'Uploaded via a web component! Check out https://github.com/GoogleWebComponents/vimeo-upload',
+
+        /**
+         * The [privacy setting](https://support.google.com/youtube/answer/157177?hl=en)
+         * for the new video.
+         *
+         * Valid values are 'public', 'private', and 'unlisted'.
+         *
+         * @attribute privacyStatus
+         * @type string
+         * @default 'public'
+         */
+        privacyStatus: 'public',
+
+        /**
+         * The file location in case of a Cordova app
+         *
+         * @attribute realUrl
+         * @type string
+         * @default 'public'
+         */
+        realUrl: null,
+
+        /**
+         * The id of the new video.
+         *
+         * This is set as soon as a `vimeo-upload-complete` event is fired.
+         *
+         * @attribute videoId
+         * @type string
+         * @default ''
+         */
+        videoId: '',
+
+        uploadStartTime: 0,
+
+        created: function(){
+
+        },
+
+        ready: function(){
+          // summery:
+          // Get the upload ticket first
+
+        },
+
+        /**
+         * Uploads a video file to Vimeo.
+         *
+         * `this.accessToken` must already be set to a valid OAuth 2 access token.
+         *
+         * @method uploadFile
+         * @param {object} file File object corresponding to the video to upload.
+         */
+        uploadFile: function(file){
+
+          // var metadata = {
+          //   snippet: {
+          //     title: this.videoTitle,
+          //     description: this.description
+          //   },
+          //   status: {
+          //     privacyStatus: this.privacyStatus
+          //   }
+          // };
+
+          var accessToken = "ebe7fcd1378b55765fb124fcc6464e0e";
+
+          var uploader = new MediaUploader({
+            baseUrl: this.url,
+            file: file,
+            token: this.accessToken,
+            isCordovaApp: this.isCordovaApp,
+            realUrl: this.realUrl,
+            // metadata: metadata,
+            // params: {
+            //   part: Object.keys(metadata).join(',')
+            // },
+            onError: function(data){
+              var message = data;
+
+              // Assuming the error is raised by the Vimeo API, data will be
+              // a JSON string with error.message set. I am not 100% sure that's the
+              // only time onError will be raised, though.
+              try {
+                var errorResponse = JSON.parse(data);
+                message = errorResponse.error;
+                this.fire('handle_error', {error: message});
+              } finally {
+                this.fire('vimeo-upload-fail', message);
+              }
+            }.bind(this),
+            onProgress: function(data){
+
+              var currentTime = Date.now();
+              var bytesUploaded = data.loaded;
+              var totalBytes = data.total;
+
+              // The times are in millis, so we need to divide by 1000 to get seconds.
+              var bytesPerSecond = bytesUploaded / ((currentTime - this.uploadStartTime) / 1000);
+              var estimatedSecondsRemaining = (totalBytes - bytesUploaded) / bytesPerSecond;
+              var fractionComplete = bytesUploaded / totalBytes;
+
+              this.fire('vimeo-upload-progress', {
+                progressEvent: data,
+                bytesPerSecond: bytesPerSecond,
+                estimatedSecondsRemaining: estimatedSecondsRemaining,
+                fractionComplete: fractionComplete
+              });
+
+            }.bind(this),
+            onComplete: function(videoId){
+              this.fire('vimeo-upload-complete', videoId);
+              this.videoId = videoId;
+              // this.pollForVideoStatus();
+            }.bind(this)
+          });
+
+          this.fire('vimeo-upload-start', file);
+          // This won't correspond to the *exact* start of the upload, but it should be close enough.
+          this.uploadStartTime = Date.now();
+          uploader.upload();
+        },
+
+        chooseFile: function(){
+          // Summery
+          // This function handles Cordova apps choose file action
+          var self = this;
+          var pictureSource = navigator.camera.PictureSourceType;
+          var destinationType = navigator.camera.DestinationType;
+          var source = pictureSource.PHOTOLIBRARY;
+
+          // Retrieve video file location from specified source
+          navigator.camera.getPicture(
+                  // Success
+                  function(imageURI){
+                    self.handleCordovaFileChanged(imageURI);
+                  },
+                  // Fail
+                  function(message){
+                    this.fire('handle_error', {error: message});
+                  },
+                  {
+                    quality: 50,
+                    destinationType: destinationType.FILE_URI,
+                    mediaType: navigator.camera.MediaType.VIDEO,
+                    sourceType: source
+                  });
+        },
+
+
+        handleCordovaFileChanged: function(imageURI){
+          // summery:
+          //  Process the file to get metadata, type size etc
+
+          var self = this;
+          window.resolveLocalFileSystemURL(imageURI,
+
+                  // Success
+                  function(fileEntry){
+                    var realUrl = fileEntry.toURL();
+                    fileEntry.file(function(file){
+                      self.realUrl = realUrl;
+                      self.handleFileChanged(null, file);
+                    });
+                  },
+                  // Fail
+                  function(e){
+                    // Do nothing
+                  });
+        },
+        handleFileChanged: function(e, file){
+
+          this.selectedFile = file || this.$.file.files[0];
+
+          this.fire('vimeo-file-changed', this.selectedFile);
+
+          if (this.auto) {
+            this.uploadFile(this.selectedFile);
+          }
+
+        },
+
+        handleUploadClicked: function(){
+          this.uploadFile(this.selectedFile);
+        },
+
+        pollForVideoStatus: function(){
+          // summery:
+          // TO BE IMPLEMENTED! Adnan @ Dec 25 2014
+          this.gapi.client.request({
+            path: '/youtube/v3/videos',
+            params: {
+              part: 'status',
+              id: this.videoId
+            },
+            callback: function(response){
+              if (response.error) {
+                // Not exactly sure how to handle this one, since it means the status polling failed.
+                setTimeout(this.pollForVideoStatus.bind(this), STATUS_POLLING_ITERVAL_MILLIS);
+              } else {
+                var status = response.items[0].status;
+
+                switch (status.uploadStatus) {
+                        // This is a non-final status, so we need to poll again.
+                  case 'uploaded':
+                    this.fire('vimeo-processing-poll', status);
+                    setTimeout(this.pollForVideoStatus.bind(this), STATUS_POLLING_ITERVAL_MILLIS);
+                    break;
+
+                        // The video was successfully transcoded and is available.
+                  case 'processed':
+                    this.fire('vimeo-processing-complete', this.videoId);
+                    break;
+
+                        // All other statuses indicate a permanent transcoding failure.
+                  default:
+                    this.fire('vimeo-processing-fail', status);
+                    break;
+                }
+              }
+            }.bind(this)
+          });
+        }
+      });
+    })();
+  </script>
+</dom-module>
